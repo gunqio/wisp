@@ -1,0 +1,88 @@
+name: Wisp自动登录
+
+on:
+  schedule:
+    - cron: '00 16 5,20 * *' 
+  workflow_dispatch:
+
+permissions:
+  contents: write # 授予工作流写入仓库内容的权限
+
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        timeout-minutes: 8
+        run: |
+          echo "Installing dependencies..."
+          pip install --quiet playwright aiohttp
+          playwright install chromium --with-deps
+          echo "Dependencies installed."
+
+      # ===============================
+      # Cloudflare 防护：随机延迟
+      # ===============================
+      - name: Pre-run random delay (Cloudflare mitigation)
+        run: |
+          DELAY=$((RANDOM % 40 + 20))
+          echo "Sleeping ${DELAY}s to avoid Cloudflare detection..."
+          sleep $DELAY
+
+      # ===============================
+      # 执行主脚本（唯一 Telegram 来源）
+      # ===============================
+      - name: Run login script
+        env:
+          WISP_ACCOUNTS: ${{ secrets.WISP_ACCOUNTS }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          echo "Starting login.py..."
+          timeout 10m python login.py
+          echo "login.py finished."
+
+      # ===============================
+      # 可选：记录最近运行时间
+      # ===============================
+      - name: Update last run timestamp
+        if: success()
+        run: |
+          echo "$(date '+%Y-%m-%d %H:%M:%S')" > last_run.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_run.txt
+          git commit -m "chore: update last run time" || echo "No changes"
+          git push || true
+
+      - name: Heartbeat commit (keep schedule alive)
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "💓 heartbeat $(date -u '+%Y-%m-%d %H:%M:%S')" > .github/heartbeat.txt
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .github/heartbeat.txt
+
+          if git diff --cached --quiet; then
+            echo "No change, skip commit"
+          else
+            git commit -m "chore: heartbeat $(date -u '+%Y-%m-%d')"
+            git push
+          fi
+
+          
